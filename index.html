@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Business Desk</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#e6e9ef; --card:#fff; --blue:#2855d9; --bg:#f5f7fb; --green:#087443; --red:#bb2936; }
+    * { box-sizing:border-box; } body { margin:0; font:14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+    header { padding:28px clamp(20px,5vw,70px); background:linear-gradient(120deg,#1b2560,#2855d9); color:#fff; } h1 { margin:0; font-size:28px; } header p { margin:6px 0 0; opacity:.82; }
+    main { max-width:1240px; margin:28px auto; padding:0 20px 40px; display:grid; gap:18px; } .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:0 2px 8px #1c275108; }
+    h2 { font-size:17px; margin:0 0 14px; } .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); } label { display:grid; gap:5px; color:var(--muted); font-weight:600; }
+    input, textarea, select, button { font:inherit; border-radius:8px; padding:10px 11px; border:1px solid #ccd2df; background:#fff; } textarea { min-height:82px; resize:vertical; } button { border:0; background:var(--blue); color:#fff; font-weight:700; cursor:pointer; } button:hover { filter:brightness(.93); } button.secondary { color:var(--blue); background:#e8edff; } button.danger { background:#fff0f1; color:var(--red); }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }.hidden { display:none!important; } #status { padding:11px 14px; border-radius:9px; background:#edf1ff; color:#264298; } #status.error { background:#fff0f1; color:var(--red); } #status.success { background:#e8f8ef; color:var(--green); }
+    .toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; } .toolbar label { min-width:190px; flex:1; } .table-wrap { overflow:auto; margin-top:16px; } table { border-collapse:collapse; width:100%; min-width:650px; } th, td { padding:10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; } th { font-size:12px; text-transform:uppercase; color:var(--muted); } td { max-width:280px; overflow-wrap:anywhere; } code { white-space:pre-wrap; } .row-actions { display:flex; gap:6px; } .note { color:var(--muted); margin:0; }
+  </style>
+</head>
+<body>
+  <header><h1>Business Desk</h1><p>Manage your company data through the connected FastAPI service.</p></header>
+  <main>
+    <div id="status">Sign in to load your business data.</div>
+    <section class="card" id="auth-card">
+      <h2>Account access</h2>
+      <div class="grid"><label>Email<input id="email" type="email" placeholder="owner@example.com" /></label><label>Password<input id="password" type="password" placeholder="At least 8 characters" /></label></div>
+      <div class="actions"><button id="login">Log in</button><button id="signup" class="secondary">Create account</button></div>
+    </section>
+    <section class="card hidden" id="setup-card">
+      <h2>Company profile</h2><p class="note">Set this up once after creating your account, or update it later.</p>
+      <div class="grid"><label>Your name<input id="owner-name" placeholder="Asha Patel" /></label><label>Company name<input id="company-name" placeholder="Patel Traders" /></label><label>Company description<textarea id="company-description" placeholder="What does your company do?"></textarea></label></div>
+      <div class="actions"><button id="save-profile">Save profile and company</button><button id="load-profile" class="secondary">Load my details</button><button id="logout" class="danger">Log out</button></div>
+    </section>
+    <section class="card hidden" id="data-card">
+      <h2>Business data</h2>
+      <div class="toolbar"><label>Data type<select id="resource"></select></label><button id="load-data">Refresh data</button><button id="new-record" class="secondary">Add record</button></div>
+      <p class="note" id="data-note">Choose a data type to see its records.</p>
+      <div class="table-wrap"><table><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+    </section>
+    <section class="card hidden" id="editor-card">
+      <h2 id="editor-title">Add record</h2><p class="note">Enter valid JSON using your Supabase table’s actual column names. Ownership fields are added securely by the API.</p>
+      <label>Record JSON<textarea id="record-json">{}</textarea></label><div class="actions"><button id="save-record">Save record</button><button id="cancel-record" class="secondary">Cancel</button></div>
+    </section>
+  </main>
+  <script>
+    const resources = ['categories','product','employee','customers','suppliers','sales','sale_items','expenses','inventory','purchase','notifications'];
+    const $ = id => document.getElementById(id); let token = localStorage.getItem('business_token') || ''; let editingId = null;
+    $('resource').innerHTML = resources.map(x => `<option value="${x}">${x.replace('_',' ')}</option>`).join('');
+    function setStatus(message, type='') { const el=$('status'); el.textContent=message; el.className=type; }
+    function showApp(on) { $('auth-card').classList.toggle('hidden',on); $('setup-card').classList.toggle('hidden',!on); $('data-card').classList.toggle('hidden',!on); if(on) setStatus('Signed in. Set up your company, then browse your data.','success'); }
+    async function api(path, options={}) { const headers={'Content-Type':'application/json', ...(options.headers||{})}; if(token) headers.Authorization=`Bearer ${token}`; const res=await fetch(path,{...options,headers}); const raw=await res.text(); let data; try { data=raw ? JSON.parse(raw) : null; } catch { data=raw; } if(!res.ok) throw new Error(data?.detail || data?.message || `Request failed (${res.status})`); return data; }
+    function escapeHtml(value) { return String(value).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+    let displayedRecords = [];
+    function renderTable(records) { const head=$('table-head'), body=$('table-body'); displayedRecords=records; const fields=[...new Set(records.flatMap(x=>Object.keys(x)))]; head.innerHTML=`<tr>${fields.map(f=>`<th>${escapeHtml(f)}</th>`).join('')}<th>Actions</th></tr>`; body.innerHTML=records.length ? records.map((row,index)=>`<tr>${fields.map(f=>`<td>${escapeHtml(typeof row[f]==='object'?JSON.stringify(row[f]):row[f]??'')}</td>`).join('')}<td><div class="row-actions"><button class="secondary" data-edit="${index}">Edit</button><button class="danger" data-delete="${row.id}">Delete</button></div></td></tr>`).join('') : '<tr><td colspan="20">No records found.</td></tr>'; }
+    async function loadData() { try { const records=await api(`/api/${$('resource').value}`); renderTable(records); $('data-note').textContent=`Showing ${records.length} ${$('resource').value} record(s).`; } catch(e) { setStatus(e.message,'error'); } }
+    async function loadProfile() { try { const [profile,company]=await Promise.all([api('/me'),api('/company')]); $('owner-name').value=profile.name||''; $('company-name').value=company.name||''; $('company-description').value=company.description||''; setStatus('Profile and company details loaded.','success'); } catch(e) { setStatus(e.message,'error'); } }
+    function editRecord(row) { editingId=row.id; $('editor-title').textContent=`Edit ${$('resource').value} #${row.id}`; const editable={...row}; delete editable.id; delete editable.company_id; delete editable.user_id; $('record-json').value=JSON.stringify(editable,null,2); $('editor-card').classList.remove('hidden'); window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'}); }
+    async function deleteRecord(id) { if(!confirm(`Delete record #${id}? This cannot be undone.`)) return; try { await api(`/api/${$('resource').value}/${id}`,{method:'DELETE'}); setStatus('Record deleted.','success'); loadData(); } catch(e) { setStatus(e.message,'error'); } }
+    $('table-body').onclick = event => { const edit=event.target.closest('[data-edit]'); const remove=event.target.closest('[data-delete]'); if(edit) editRecord(displayedRecords[Number(edit.dataset.edit)]); if(remove) deleteRecord(Number(remove.dataset.delete)); };
+    $('signup').onclick=async()=>{ try { const data=await api('/sign-up',{method:'POST',body:JSON.stringify({email:$('email').value,password:$('password').value})}); setStatus(`${data.message}. You can now log in.`,'success'); } catch(e) { setStatus(e.message,'error'); } };
+    $('login').onclick=async()=>{ try { const data=await api('/login',{method:'POST',body:JSON.stringify({email:$('email').value,password:$('password').value})}); token=data.access_token; localStorage.setItem('business_token',token); showApp(true); } catch(e) { setStatus(e.message,'error'); } };
+    $('save-profile').onclick=async()=>{ try { const data=await api('/set-up-profile',{method:'POST',body:JSON.stringify({name:$('owner-name').value,company_name:$('company-name').value,disc:$('company-description').value})}); setStatus(data.message,'success'); loadData(); } catch(e) { setStatus(e.message,'error'); } };
+    $('load-profile').onclick=loadProfile; $('load-data').onclick=loadData; $('resource').onchange=loadData;
+    $('logout').onclick=()=>{ token=''; localStorage.removeItem('business_token'); editingId=null; displayedRecords=[]; $('table-head').innerHTML=''; $('table-body').innerHTML=''; $('editor-card').classList.add('hidden'); showApp(false); setStatus('You have been logged out.'); };
+    $('new-record').onclick=()=>{ editingId=null; $('editor-title').textContent=`Add ${$('resource').value}`; $('record-json').value='{}'; $('editor-card').classList.remove('hidden'); };
+    $('cancel-record').onclick=()=>$('editor-card').classList.add('hidden');
+    $('save-record').onclick=async()=>{ try { const payload=JSON.parse($('record-json').value); const path=`/api/${$('resource').value}${editingId ? '/'+editingId : ''}`; await api(path,{method:editingId?'PATCH':'POST',body:JSON.stringify(payload)}); setStatus(editingId?'Record updated.':'Record created.','success'); $('editor-card').classList.add('hidden'); loadData(); } catch(e) { setStatus(e instanceof SyntaxError?'Enter valid JSON.':e.message,'error'); } };
+    if(token) showApp(true);
+  </script>
+</body>
+</html>
